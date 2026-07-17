@@ -1,4 +1,4 @@
---information:Open Glow v1.0.0 (物理減衰グロー)
+--information:Open Glow v1.1.0 (物理減衰グロー)
 --label:発光
 --filter
 --track@strength:強さ,0,1000,100,0.1
@@ -9,8 +9,7 @@
 --select@blend_mode:合成モード=0,リニア加算=0,スクリーン=1,グローのみ=2
 --color@tint:光色,nil
 --group:アスペクト比
---track@aspect:縦横比,0.1,10,1,0.01
---check@use_angle:角度を有効化,false
+--track@aspect:縦横比,-10,10,0,0.01
 --track@angle:角度,-360,360,0,0.01
 --group:オプション,false
 --check@dither:ディザ,true
@@ -19,7 +18,8 @@
 
 --[[pixelshader@OG_Pre:
 // 前処理: グロー空間(回転+短軸圧縮)へ変換しつつ、ガンマ補正でリニア光化、
-//         しきい値カット(ソフトニー)と光色を適用。圧縮軸はボックスフィルタで縮小。
+//         しきい値カット(ソフトニー)と光色を適用。
+//         圧縮軸は幅2Aのテントフィルタで縮小(ボックスよりエイリアシングが少ない)。
 Texture2D src : register(t0);
 SamplerState smp : register(s0);
 cbuffer constant0 : register(b0) {
@@ -34,13 +34,16 @@ float4 OG_Pre(float4 pos : SV_Position) : SV_Target {
     float2 p = float2(m00 * q.x + m01 * q.y, m10 * q.x + m11 * q.y) + float2(crx, cry);
     int n = int(taps + 0.5);
     float4 acc = 0.0;
+    float wsum = 0.0;
     for (int i = 0; i < n; i++) {
-        float t = (i + 0.5) / taps - 0.5;
+        float t = 2.0 * (i + 0.5) / taps - 1.0;
+        float w = 1.0 - abs(t);
         float2 sp = p + t * float2(vx, vy);
         float4 c = src.SampleLevel(smp, sp * float2(inv_w, inv_h), 0);
-        acc += float4(pow(max(c.rgb, 0.0), gam), c.a);
+        acc += w * float4(pow(max(c.rgb, 0.0), gam), c.a);
+        wsum += w;
     }
-    acc /= taps;
+    acc /= wsum;
     float br = max(acc.r, max(acc.g, acc.b));
     float soft = clamp(br - th_lin + knee, 0.0, 2.0 * knee);
     soft = soft * soft / (4.0 * knee + 1e-5);
@@ -108,16 +111,44 @@ cbuffer constant0 : register(b0) {
     float i00, i01, i10, i11;
     float crx, cry, cgx, cgy;
     float inv_gw, inv_gh, dith, mono;
-    float tox, toy, pad0, pad1;
+    float tox, toy, gw, gh;
 };
 float ign(float2 xy) {
     return frac(52.9829189 * frac(0.06711056 * xy.x + 0.00583715 * xy.y));
+}
+// Catmull-Romバイキュービック読み出し (9タップ最適化版)。
+// 縦横比使用時はグローバッファをA倍に引き伸ばして読むため、バイリニアだと
+// 折れ線状の補間ムラが縁のギザギザとして見える。C1連続な補間で滑らかにする。
+// (倍率1のときは重みが単位化されバイリニアと完全一致)
+float3 sample_cr(float2 uv) {
+    float2 sp = uv * float2(gw, gh);
+    float2 tc = floor(sp - 0.5) + 0.5;
+    float2 f = sp - tc;
+    float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    float2 w3 = f * f * (0.5 * f - 0.5);
+    float2 w12 = 1.0 - w0 - w3;
+    float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    float2 it = float2(inv_gw, inv_gh);
+    float2 p0 = (tc - 1.0) * it;
+    float2 p3 = (tc + 2.0) * it;
+    float2 p12 = (tc + w2 / w12) * it;
+    float3 s;
+    s  = (glw.SampleLevel(smp, float2(p0.x,  p0.y ), 0).rgb * w0.x
+        + glw.SampleLevel(smp, float2(p12.x, p0.y ), 0).rgb * w12.x
+        + glw.SampleLevel(smp, float2(p3.x,  p0.y ), 0).rgb * w3.x) * w0.y;
+    s += (glw.SampleLevel(smp, float2(p0.x,  p12.y), 0).rgb * w0.x
+        + glw.SampleLevel(smp, float2(p12.x, p12.y), 0).rgb * w12.x
+        + glw.SampleLevel(smp, float2(p3.x,  p12.y), 0).rgb * w3.x) * w12.y;
+    s += (glw.SampleLevel(smp, float2(p0.x,  p3.y ), 0).rgb * w0.x
+        + glw.SampleLevel(smp, float2(p12.x, p3.y ), 0).rgb * w12.x
+        + glw.SampleLevel(smp, float2(p3.x,  p3.y ), 0).rgb * w3.x) * w3.y;
+    return s;
 }
 float4 OG_Final(float4 pos : SV_Position) : SV_Target {
     float2 p = pos.xy - float2(crx, cry);
     float2 quv = (float2(i00 * p.x + i01 * p.y, i10 * p.x + i11 * p.y)
                   + float2(cgx, cgy)) * float2(inv_gw, inv_gh);
-    float3 g_lin = max(amp * glw.SampleLevel(smp, quv, 0).rgb, 0.0);
+    float3 g_lin = max(amp * sample_cr(quv), 0.0);
     float3 g_enc = pow(g_lin, inv_gam);
     float ah = saturate(max(g_enc.r, max(g_enc.g, g_enc.b)));
     float4 c = src.Load(int3(pos.xy, 0));
@@ -168,13 +199,13 @@ if tint then
 end
 
 -- アスペクト比: グロー空間 = 実空間を回転して長軸方向に1/Aへ圧縮した空間
+--   縦横比0で円形、正で横長、負で縦長。伸長率 A = 1 + |縦横比|
 --   実空間でのぼかし幅は 長軸 R*sqrt(A) / 短軸 R/sqrt(A) (幾何平均がRのまま保たれる)
-local A = math.max(aspect, 1 / math.max(aspect, 0.1))
-A = math.min(A, 10)
-local elongX = aspect >= 1
+local A = 1 + math.min(math.abs(aspect), 10)
+local elongX = aspect >= 0
 local Rg = R / math.sqrt(A)
 local th = 0
-if use_angle and A > 1 then th = angle * math.pi / 180 end
+if A > 1 then th = angle * math.pi / 180 end
 local co, si = math.cos(th), math.sin(th)
 local sx, sy = 1, 1
 if A > 1 then
@@ -183,7 +214,9 @@ end
 -- M: グロー空間→実空間 (回転*拡大)、Iv: その逆
 local m00, m01, m10, m11 = co * sx, -si * sy, si * sx, co * sy
 local i00, i01, i10, i11 = co / sx, si / sx, -si / sy, co / sy
-local K = math.max(1, math.ceil(A - 1e-6))       -- 圧縮軸のボックスフィルタのタップ数
+-- 圧縮軸のテントフィルタ(幅2A)のタップ数: 間隔が1px以下になるよう2⌈A⌉
+local K = 1
+if A > 1 then K = 2 * math.ceil(A - 1e-6) end
 local vx, vy
 if elongX then vx, vy = m00, m10 else vx, vy = m01, m11 end
 
@@ -276,5 +309,5 @@ obj.pixelshader("OG_Final", "object", { "object", buf[0] }, {
     i00, i01, i10, i11,
     W / 2, H / 2, GW / 2, GH / 2,
     1 / GW, 1 / GH, dither and 1 or 0, mono_dither and 1 or 0,
-    tox, toy, 0, 0,
+    tox, toy, GW, GH,
 }, "copy", "clip")
