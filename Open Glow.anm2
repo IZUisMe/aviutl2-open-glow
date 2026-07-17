@@ -1,0 +1,280 @@
+--information:Open Glow v1.0.0 (物理減衰グロー)
+--label:発光
+--filter
+--track@strength:強さ,0,1000,100,0.1
+--track@radius:拡散,4,2000,300,1
+--track@falloff:減衰,0.5,4,2,0.01
+--track@threshold:しきい値,0,100,0,0.1
+--track@gamma_v:ガンマ,1,3,2.2,0.01
+--select@blend_mode:合成モード=0,リニア加算=0,スクリーン=1,グローのみ=2
+--color@tint:光色,nil
+--group:アスペクト比
+--track@aspect:縦横比,0.1,10,1,0.01
+--check@use_angle:角度を有効化,false
+--track@angle:角度,-360,360,0,0.01
+--group:オプション,false
+--check@dither:ディザ,true
+--check@mono_dither:モノクロディザ,false
+--check@fixsize:サイズ固定,false
+
+--[[pixelshader@OG_Pre:
+// 前処理: グロー空間(回転+短軸圧縮)へ変換しつつ、ガンマ補正でリニア光化、
+//         しきい値カット(ソフトニー)と光色を適用。圧縮軸はボックスフィルタで縮小。
+Texture2D src : register(t0);
+SamplerState smp : register(s0);
+cbuffer constant0 : register(b0) {
+    float th_lin, knee, gam, taps;
+    float tint_r, tint_g, tint_b, pad0;
+    float m00, m01, m10, m11;
+    float crx, cry, cgx, cgy;
+    float vx, vy, inv_w, inv_h;
+};
+float4 OG_Pre(float4 pos : SV_Position) : SV_Target {
+    float2 q = pos.xy - float2(cgx, cgy);
+    float2 p = float2(m00 * q.x + m01 * q.y, m10 * q.x + m11 * q.y) + float2(crx, cry);
+    int n = int(taps + 0.5);
+    float4 acc = 0.0;
+    for (int i = 0; i < n; i++) {
+        float t = (i + 0.5) / taps - 0.5;
+        float2 sp = p + t * float2(vx, vy);
+        float4 c = src.SampleLevel(smp, sp * float2(inv_w, inv_h), 0);
+        acc += float4(pow(max(c.rgb, 0.0), gam), c.a);
+    }
+    acc /= taps;
+    float br = max(acc.r, max(acc.g, acc.b));
+    float soft = clamp(br - th_lin + knee, 0.0, 2.0 * knee);
+    soft = soft * soft / (4.0 * knee + 1e-5);
+    float contrib = max(soft, br - th_lin) / max(br, 1e-5);
+    return float4(acc.rgb * (contrib * float3(tint_r, tint_g, tint_b)), acc.a * contrib);
+}
+]]
+
+--[[pixelshader@OG_Down:
+// 1/2縮小 (13タップ・Jimenezフィルタ: ちらつき防止の定番)
+Texture2D src : register(t0);
+SamplerState smp : register(s0);
+cbuffer constant0 : register(b0) {
+    float2 t;
+};
+float4 OG_Down(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
+    float4 s = 0.125 * src.SampleLevel(smp, uv, 0);
+    s += 0.125   * src.SampleLevel(smp, uv + t * float2(-1.0, -1.0), 0);
+    s += 0.125   * src.SampleLevel(smp, uv + t * float2( 1.0, -1.0), 0);
+    s += 0.125   * src.SampleLevel(smp, uv + t * float2(-1.0,  1.0), 0);
+    s += 0.125   * src.SampleLevel(smp, uv + t * float2( 1.0,  1.0), 0);
+    s += 0.0625  * src.SampleLevel(smp, uv + t * float2( 0.0, -2.0), 0);
+    s += 0.0625  * src.SampleLevel(smp, uv + t * float2(-2.0,  0.0), 0);
+    s += 0.0625  * src.SampleLevel(smp, uv + t * float2( 2.0,  0.0), 0);
+    s += 0.0625  * src.SampleLevel(smp, uv + t * float2( 0.0,  2.0), 0);
+    s += 0.03125 * src.SampleLevel(smp, uv + t * float2(-2.0, -2.0), 0);
+    s += 0.03125 * src.SampleLevel(smp, uv + t * float2( 2.0, -2.0), 0);
+    s += 0.03125 * src.SampleLevel(smp, uv + t * float2(-2.0,  2.0), 0);
+    s += 0.03125 * src.SampleLevel(smp, uv + t * float2( 2.0,  2.0), 0);
+    return s;
+}
+]]
+
+--[[pixelshader@OG_Up:
+// テント補間で拡大した下位レベルを重みwlowで現レベルに累積
+Texture2D low : register(t0);
+Texture2D cur : register(t1);
+SamplerState smp : register(s0);
+cbuffer constant0 : register(b0) {
+    float2 t;
+    float wlow, pad0;
+};
+float4 OG_Up(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target {
+    float4 s = 4.0 * low.SampleLevel(smp, uv, 0);
+    s += 2.0 * low.SampleLevel(smp, uv + t * float2(-1.0,  0.0), 0);
+    s += 2.0 * low.SampleLevel(smp, uv + t * float2( 1.0,  0.0), 0);
+    s += 2.0 * low.SampleLevel(smp, uv + t * float2( 0.0, -1.0), 0);
+    s += 2.0 * low.SampleLevel(smp, uv + t * float2( 0.0,  1.0), 0);
+    s += low.SampleLevel(smp, uv + t * float2(-1.0, -1.0), 0);
+    s += low.SampleLevel(smp, uv + t * float2( 1.0, -1.0), 0);
+    s += low.SampleLevel(smp, uv + t * float2(-1.0,  1.0), 0);
+    s += low.SampleLevel(smp, uv + t * float2( 1.0,  1.0), 0);
+    return cur.Load(int3(pos.xy, 0)) + wlow * (s / 16.0);
+}
+]]
+
+--[[pixelshader@OG_Final:
+// 合成: グロー空間から逆変換で読み出し、リニア空間で光を加算してガンマ空間へ戻す。
+//       仕上げにIGNディザで量子化バンディングを防止。
+Texture2D src : register(t0);
+Texture2D glw : register(t1);
+SamplerState smp : register(s0);
+cbuffer constant0 : register(b0) {
+    float amp, inv_gam, gam, mode;
+    float i00, i01, i10, i11;
+    float crx, cry, cgx, cgy;
+    float inv_gw, inv_gh, dith, mono;
+    float tox, toy, pad0, pad1;
+};
+float ign(float2 xy) {
+    return frac(52.9829189 * frac(0.06711056 * xy.x + 0.00583715 * xy.y));
+}
+float4 OG_Final(float4 pos : SV_Position) : SV_Target {
+    float2 p = pos.xy - float2(crx, cry);
+    float2 quv = (float2(i00 * p.x + i01 * p.y, i10 * p.x + i11 * p.y)
+                  + float2(cgx, cgy)) * float2(inv_gw, inv_gh);
+    float3 g_lin = max(amp * glw.SampleLevel(smp, quv, 0).rgb, 0.0);
+    float3 g_enc = pow(g_lin, inv_gam);
+    float ah = saturate(max(g_enc.r, max(g_enc.g, g_enc.b)));
+    float4 c = src.Load(int3(pos.xy, 0));
+    float3 rgb;
+    float a_out;
+    if (mode > 1.5) {                                             // グローのみ
+        rgb = min(g_enc, 1.0);
+        a_out = ah;
+    } else {
+        a_out = c.a + (1.0 - c.a) * ah;
+        if (mode < 0.5) {                                         // リニア加算
+            rgb = pow(pow(max(c.rgb, 0.0), gam) + g_lin, inv_gam);
+        } else {                                                  // スクリーン
+            rgb = c.rgb + min(g_enc, 1.0) * (1.0 - min(c.rgb, 1.0));
+        }
+    }
+    if (dith > 0.5) {
+        float2 xy = pos.xy + float2(tox, toy);
+        float3 nz;
+        nz.r = ign(xy);
+        nz.g = mono > 0.5 ? nz.r : ign(xy + 17.83);
+        nz.b = mono > 0.5 ? nz.r : ign(xy - 17.83);
+        // 値が0(完全透明・完全黒)の画素は汚さない
+        rgb = max(rgb + (nz - 0.5) / 255.0 * (rgb > 0.0 ? (float3)1.0 : (float3)0.0), 0.0);
+        if (a_out > 0.0 && a_out < 1.0) {
+            a_out = saturate(a_out + (ign(xy + float2(-31.41, 47.12)) - 0.5) / 255.0);
+        }
+    }
+    return float4(rgb, a_out);
+}
+]]
+
+local obj, math = obj, math
+
+-- パラメータ正規化
+local I = strength / 100
+local R = math.max(radius, 4)
+local gam = gamma_v
+if I <= 0 or obj.w < 1 or obj.h < 1 then return end
+
+-- 光色 (リニア空間の係数に変換)
+local tr, tg, tb = 1.0, 1.0, 1.0
+if tint then
+    local r8, g8, b8 = RGB(tint)
+    tr = (r8 / 255) ^ gam
+    tg = (g8 / 255) ^ gam
+    tb = (b8 / 255) ^ gam
+end
+
+-- アスペクト比: グロー空間 = 実空間を回転して長軸方向に1/Aへ圧縮した空間
+--   実空間でのぼかし幅は 長軸 R*sqrt(A) / 短軸 R/sqrt(A) (幾何平均がRのまま保たれる)
+local A = math.max(aspect, 1 / math.max(aspect, 0.1))
+A = math.min(A, 10)
+local elongX = aspect >= 1
+local Rg = R / math.sqrt(A)
+local th = 0
+if use_angle and A > 1 then th = angle * math.pi / 180 end
+local co, si = math.cos(th), math.sin(th)
+local sx, sy = 1, 1
+if A > 1 then
+    if elongX then sx = A else sy = A end
+end
+-- M: グロー空間→実空間 (回転*拡大)、Iv: その逆
+local m00, m01, m10, m11 = co * sx, -si * sy, si * sx, co * sy
+local i00, i01, i10, i11 = co / sx, si / sx, -si / sy, co / sy
+local K = math.max(1, math.ceil(A - 1e-6))       -- 圧縮軸のボックスフィルタのタップ数
+local vx, vy
+if elongX then vx, vy = m00, m10 else vx, vy = m01, m11 end
+
+-- グローがはみ出す領域を確保 (フィルタオブジェクト時とサイズ固定時は拡張しない)
+local maxw, maxh = obj.getinfo("image_max")
+if not (obj.getinfo("filter") or fixsize) then
+    local Rx, Ry = 1.25 * Rg * sx, 1.25 * Rg * sy    -- 回転軸に沿った実空間の広がり
+    local ex = math.sqrt((Rx * co) ^ 2 + (Ry * si) ^ 2)
+    local ey = math.sqrt((Rx * si) ^ 2 + (Ry * co) ^ 2)
+    local padx = math.floor(math.max(math.min(ex, (maxw - obj.w) / 2), 0))
+    local pady = math.floor(math.max(math.min(ey, (maxh - obj.h) / 2), 0))
+    if padx > 0 or pady > 0 then
+        obj.effect("領域拡張", "上", pady, "下", pady, "左", padx, "右", padx, "塗りつぶし", 0)
+    end
+end
+
+local W, H = obj.w, obj.h
+
+-- グロー空間バッファのサイズ (実空間の矩形を逆変換したときの外接矩形)
+local GW = math.min(math.max(1, math.ceil((W * math.abs(co) + H * math.abs(si)) / sx)), maxw)
+local GH = math.min(math.max(1, math.ceil((W * math.abs(si) + H * math.abs(co)) / sy)), maxh)
+
+-- ピラミッドの段数: 拡散半径Rgに対して log2(Rg) 段 (端数は最上段の重みで補間)
+-- 重み比 q = 2^(2-p): 1オクターブごとに重みq倍 → 合成PSFの裾が r^(-p) に漸近
+--   p=2 (q=1, 等重み) がちょうど逆二乗則
+local p = falloff
+local q = 2 ^ (2 - p)
+local nf = math.max(math.log(Rg) / math.log(2), 0.05)
+local n_full = math.min(math.floor(nf), 12)
+local frac = nf - n_full
+local M = math.min(n_full + (frac > 0 and 1 or 0), 12)
+
+-- 各レベルのサイズ (小さくなりすぎたら打ち切り)
+local lw, lh = { [0] = GW }, { [0] = GH }
+local Meff = 0
+for k = 1, M do
+    if math.max(lw[k - 1], lh[k - 1]) <= 2 then break end
+    lw[k] = math.max(1, math.ceil(lw[k - 1] / 2))
+    lh[k] = math.max(1, math.ceil(lh[k - 1] / 2))
+    Meff = k
+end
+M = math.min(M, Meff)
+if M < 1 then return end
+local partial = frac > 0 and M == n_full + 1
+
+-- 正規化係数 (実際に使うレベルの重みの総和)
+local total, coeff = 1.0, 1.0
+for k = 1, M do
+    coeff = coeff * q
+    total = total + (partial and k == M and coeff * frac or coeff)
+end
+
+local buf = {}
+for k = 0, M do buf[k] = "cache:open_glow/" .. k end
+
+-- ディザの時間オフセット (フレーム毎にパターンをずらす)
+local tox, toy = 0, 0
+if dither then
+    local f = obj.frame % 64
+    tox, toy = f * 23.0, f * 41.0
+end
+
+-- [1] 前処理: グロー空間へ変換 + リニア化 + しきい値 + 光色 → レベル0
+local t_lin = (threshold / 100) ^ gam
+obj.clearbuffer(buf[0], GW, GH)
+obj.pixelshader("OG_Pre", buf[0], "object", {
+    t_lin, 0.5 * t_lin, gam, K,
+    tr, tg, tb, 0,
+    m00, m01, m10, m11,
+    W / 2, H / 2, GW / 2, GH / 2,
+    vx, vy, 1 / W, 1 / H,
+}, "copy", "clip")
+
+-- [2] ダウンサンプル・チェーン
+for k = 1, M do
+    obj.clearbuffer(buf[k], lw[k], lh[k])
+    obj.pixelshader("OG_Down", buf[k], buf[k - 1], { 1 / lw[k - 1], 1 / lh[k - 1] }, "copy", "clip")
+end
+
+-- [3] アップサンプルしながら重み付き累積 (最深段→レベル0)
+for k = M - 1, 0, -1 do
+    local wl = (partial and k == M - 1) and q * frac or q
+    obj.pixelshader("OG_Up", buf[k], { buf[k + 1], buf[k] },
+        { 1 / lw[k + 1], 1 / lh[k + 1], wl, 0 }, "copy", "clip")
+end
+
+-- [4] 合成 (グロー空間から逆変換で読み出し)
+obj.pixelshader("OG_Final", "object", { "object", buf[0] }, {
+    I / total, 1 / gam, gam, blend_mode,
+    i00, i01, i10, i11,
+    W / 2, H / 2, GW / 2, GH / 2,
+    1 / GW, 1 / GH, dither and 1 or 0, mono_dither and 1 or 0,
+    tox, toy, 0, 0,
+}, "copy", "clip")
