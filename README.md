@@ -4,6 +4,8 @@ AviUtl ExEdit2 用のグロースクリプトです。光の物理法則(逆二�
 
 After Effects プラグイン「Deep Glow」(Plugin Everything) のコンセプトを参考にした非公式・独立実装であり、同社とは無関係です。
 
+作者: **絵に描いた虹**
+
 ## 特徴
 
 - **物理的な減衰** — グロー光の裾が距離のp乗に反比例して減衰。既定の p=2 は現実の光の逆二乗則そのもの
@@ -14,14 +16,18 @@ After Effects プラグイン「Deep Glow」(Plugin Everything) のコンセプ�
 - **軽量** — 解像度を半分ずつ落とすミップピラミッド方式。フルHDでも総処理画素は元画像の約2.7倍相当
 - しきい値(ソフトニー付き)、光色、グローのみ出力、フィルタオブジェクト対応
 
-## インストール
+## ダウンロード / インストール
 
-[`OpenGlow.anm2`](OpenGlow.anm2) を `C:\ProgramData\aviutl2\Script\`(またはその直下のフォルダ)にコピーしてください。
+[GitHub Releases](https://github.com/IZUisMe/aviutl2-open-glow/releases/latest) から最新版の `aviutl2_script_OpenGlow-r*.au2pkg.zip` をダウンロードし、AviUtl2 のプレビュー画面へドラッグ＆ドロップしてください。
+
+インストール後、次の場所に追加されます。
 
 - アニメーション効果 / フィルタ効果: 「光効果」カテゴリ → **Open Glow**
 - フィルタオブジェクトとしても使用可能(画面全体にかける場合)
 
-更新時はコピー後に AviUtl2 で「キャッシュを破棄」を実行すると再読み込みされます。
+### 手動で導入する場合
+
+[`OpenGlow.anm2`](OpenGlow.anm2) を `C:\ProgramData\aviutl2\Script\`(またはその直下のフォルダ)にコピーしてください。更新時はコピー後に AviUtl2 で「キャッシュを破棄」を実行すると再読み込みされます。
 
 ## パラメータ
 
@@ -72,7 +78,7 @@ After Effects プラグイン「Deep Glow」(Plugin Everything) のコンセプ�
 
 ## ライセンス
 
-[MIT License](LICENSE)
+[MIT License](LICENSE) — Copyright (c) 2026 絵に描いた虹
 
 ## 謝辞・参考
 

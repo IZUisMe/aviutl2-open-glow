@@ -1,0 +1,11 @@
+# Open Glow
+
+AviUtl ExEdit2 用の物理減衰グロースクリプトです。
+
+逆二乗則に従って遠くまで自然に減衰する光を、HLSLピクセルシェーダーによるGPU処理で描画します。しきい値、減衰指数、光色、縦横比、角度、ディザなどを調整できます。
+
+作者:
+絵に描いた虹
+
+公開ページ:
+https://github.com/IZUisMe/aviutl2-open-glow
