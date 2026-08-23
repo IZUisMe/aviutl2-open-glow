@@ -16,9 +16,9 @@ After Effects プラグイン「Deep Glow」(Plugin Everything) のコンセプ�
 
 ## インストール
 
-[`Open Glow.anm2`](Open%20Glow.anm2) を `C:\ProgramData\aviutl2\Script\`(またはその直下のフォルダ)にコピーしてください。
+[`OpenGlow.anm2`](OpenGlow.anm2) を `C:\ProgramData\aviutl2\Script\`(またはその直下のフォルダ)にコピーしてください。
 
-- アニメーション効果 / フィルタ効果: 「発光」カテゴリ → **Open Glow**
+- アニメーション効果 / フィルタ効果: 「光効果」カテゴリ → **Open Glow**
 - フィルタオブジェクトとしても使用可能(画面全体にかける場合)
 
 更新時はコピー後に AviUtl2 で「キャッシュを破棄」を実行すると再読み込みされます。

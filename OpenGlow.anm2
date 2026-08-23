@@ -1,5 +1,5 @@
---information:Open Glow v1.1.0 (物理減衰グロー)
---label:発光
+--information:Open Glow r1 (物理減衰グロー)
+--label:光効果
 --filter
 --track@strength:強さ,0,1000,100,0.1
 --track@radius:拡散,4,2000,300,1
