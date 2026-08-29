@@ -1,5 +1,10 @@
 # Open Glow
 
+![Open Glow ON/OFF比較](OpenglowONOFF.gif)
+
+- [解説・使い方（note）](https://note.com/izu_is_me/n/n29b6fe878c53)
+- [ダウンロード（BOOTH）](https://infiniterainbow.booth.pm/items/8754573)
+
 AviUtl ExEdit2 用のグロースクリプトです。光の物理法則(逆二乗則)に従って減衰するリアルなグローを、GPU処理(HLSLピクセルシェーダー)により標準の発光/グローと同等以下の負荷で実現します。
 
 After Effects プラグイン「Deep Glow」(Plugin Everything) のコンセプトを参考にした非公式・独立実装であり、同社とは無関係です。
