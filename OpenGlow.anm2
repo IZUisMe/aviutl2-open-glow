@@ -15,6 +15,7 @@
 --check@dither:ディザ,true
 --check@mono_dither:モノクロディザ,false
 --check@fixsize:サイズ固定,false
+--hide@fixsize:filter==1
 
 --[[pixelshader@OG_Pre:
 // 前処理: グロー空間(回転+短軸圧縮)へ変換しつつ、ガンマ補正でリニア光化、
