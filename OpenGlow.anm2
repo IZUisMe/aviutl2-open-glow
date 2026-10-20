@@ -20,7 +20,7 @@
 --[[pixelshader@OG_Pre:
 // 前処理: グロー空間(回転+短軸圧縮)へ変換しつつ、ガンマ補正でリニア光化、
 //         しきい値カット(ソフトニー)と光色を適用。
-//         圧縮軸は幅2Aのテントフィルタで縮小(ボックスよりエイリアシングが少ない)。
+//         縮小する両軸をテントフィルタで読み、周辺の細い光源も拾う。
 Texture2D src : register(t0);
 SamplerState smp : register(s0);
 cbuffer constant0 : register(b0) {
@@ -29,20 +29,25 @@ cbuffer constant0 : register(b0) {
     float m00, m01, m10, m11;
     float crx, cry, cgx, cgy;
     float vx, vy, inv_w, inv_h;
+    float ux, uy, taps_y, pad1;
 };
 float4 OG_Pre(float4 pos : SV_Position) : SV_Target {
     float2 q = pos.xy - float2(cgx, cgy);
     float2 p = float2(m00 * q.x + m01 * q.y, m10 * q.x + m11 * q.y) + float2(crx, cry);
     int n = int(taps + 0.5);
+    int ny = int(taps_y + 0.5);
     float4 acc = 0.0;
     float wsum = 0.0;
-    for (int i = 0; i < n; i++) {
-        float t = 2.0 * (i + 0.5) / taps - 1.0;
-        float w = 1.0 - abs(t);
-        float2 sp = p + t * float2(vx, vy);
-        float4 c = src.SampleLevel(smp, sp * float2(inv_w, inv_h), 0);
-        acc += w * float4(pow(max(c.rgb, 0.0), gam), c.a);
-        wsum += w;
+    for (int j = 0; j < ny; j++) {
+        float u = 2.0 * (j + 0.5) / taps_y - 1.0;
+        for (int i = 0; i < n; i++) {
+            float t = 2.0 * (i + 0.5) / taps - 1.0;
+            float w = (1.0 - abs(t)) * (1.0 - abs(u));
+            float2 sp = p + t * float2(vx, vy) + u * float2(ux, uy);
+            float4 c = src.SampleLevel(smp, sp * float2(inv_w, inv_h), 0);
+            acc += w * float4(pow(max(c.rgb, 0.0), gam), c.a);
+            wsum += w;
+        }
     }
     acc /= wsum;
     float br = max(acc.r, max(acc.g, acc.b));
@@ -215,12 +220,6 @@ end
 -- M: グロー空間→実空間 (回転*拡大)、Iv: その逆
 local m00, m01, m10, m11 = co * sx, -si * sy, si * sx, co * sy
 local i00, i01, i10, i11 = co / sx, si / sx, -si / sy, co / sy
--- 圧縮軸のテントフィルタ(幅2A)のタップ数: 間隔が1px以下になるよう2⌈A⌉
-local K = 1
-if A > 1 then K = 2 * math.ceil(A - 1e-6) end
-local vx, vy
-if elongX then vx, vy = m00, m10 else vx, vy = m01, m11 end
-
 -- グローがはみ出す領域を確保 (フィルタオブジェクト時とサイズ固定時は拡張しない)
 local maxw, maxh = obj.getinfo("image_max")
 if not (obj.getinfo("filter") or fixsize) then
@@ -237,8 +236,42 @@ end
 local W, H = obj.w, obj.h
 
 -- グロー空間バッファのサイズ (実空間の矩形を逆変換したときの外接矩形)
-local GW = math.min(math.max(1, math.ceil((W * math.abs(co) + H * math.abs(si)) / sx)), maxw)
-local GH = math.min(math.max(1, math.ceil((W * math.abs(si) + H * math.abs(co)) / sy)), maxh)
+local full_gw = math.max(1, math.ceil((W * math.abs(co) + H * math.abs(si)) / sx))
+local full_gh = math.max(1, math.ceil((W * math.abs(si) + H * math.abs(co)) / sy))
+
+-- 一時画像キャッシュの既定上限は16,000,000ドット(system.conf)。
+-- ピラミッド全体とOG_Upの同一入出力に伴う複製1枚を含め、14,000,000以内に抑える。
+-- image_maxによる単純な切り詰めも避け、外接矩形全体を縮小して保持する。
+local budget = 14000000
+local scale = math.min(1, maxw / full_gw, maxh / full_gh)
+local GW, GH
+while true do
+    GW = math.max(1, math.floor(full_gw * scale))
+    GH = math.max(1, math.floor(full_gh * scale))
+    local w, h = GW, GH
+    local dots = 2 * w * h
+    for k = 1, 12 do
+        if math.max(w, h) <= 2 then break end
+        w, h = math.max(1, math.ceil(w / 2)), math.max(1, math.ceil(h / 2))
+        dots = dots + w * h
+    end
+    if dots <= budget then break end
+    scale = scale * math.sqrt(budget / dots) * 0.99
+end
+
+-- 前処理と合成で逆の倍率を使う。サイズだけ縮めると画像中央しか発光しなくなる。
+local dx, dy = full_gw / GW, full_gh / GH
+m00, m10 = m00 * dx, m10 * dx
+m01, m11 = m01 * dy, m11 * dy
+i00, i01 = i00 / dx, i01 / dx
+i10, i11 = i10 / dy, i11 / dy
+Rg = Rg / math.sqrt(dx * dy)
+
+local function taps_for(width)
+    if width <= 1 + 1e-6 then return 1 end
+    return 2 * math.ceil(width - 1e-6)
+end
+local K, Ky = taps_for(sx * dx), taps_for(sy * dy)
 
 -- ピラミッドの段数: 拡散半径Rgに対して log2(Rg) 段 (端数は最上段の重みで補間)
 -- 重み比 q = 2^(2-p): 1オクターブごとに重みq倍 → 合成PSFの裾が r^(-p) に漸近
@@ -288,7 +321,8 @@ obj.pixelshader("OG_Pre", buf[0], "object", {
     tr, tg, tb, 0,
     m00, m01, m10, m11,
     W / 2, H / 2, GW / 2, GH / 2,
-    vx, vy, 1 / W, 1 / H,
+    m00, m10, 1 / W, 1 / H,
+    m01, m11, Ky, 0,
 }, "copy", "clip")
 
 -- [2] ダウンサンプル・チェーン
@@ -302,6 +336,8 @@ for k = M - 1, 0, -1 do
     local wl = (partial and k == M - 1) and q * frac or q
     obj.pixelshader("OG_Up", buf[k], { buf[k + 1], buf[k] },
         { 1 / lw[k + 1], 1 / lh[k + 1], wl, 0 }, "copy", "clip")
+    -- 読み終えた段を解放し、同じフレーム内の別のOpen Glowに残さない。
+    obj.clearbuffer(buf[k + 1], 1, 1)
 end
 
 -- [4] 合成 (グロー空間から逆変換で読み出し)
@@ -312,3 +348,4 @@ obj.pixelshader("OG_Final", "object", { "object", buf[0] }, {
     1 / GW, 1 / GH, dither and 1 or 0, mono_dither and 1 or 0,
     tox, toy, GW, GH,
 }, "copy", "clip")
+obj.clearbuffer(buf[0], 1, 1)
