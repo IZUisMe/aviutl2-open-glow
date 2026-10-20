@@ -3,3 +3,4 @@ promotion/
 Thumbs.db
 *.bak
 /.validation/
+/dist/
