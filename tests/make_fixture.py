@@ -42,15 +42,16 @@ effect.name={effect}
 縦横比={aspect}
 角度={angle}
 ディザ=1
-サイズ固定=1
+サイズ固定={fixed}
 """
-for name, effect, aspect, angle in (
-    ("fixed", "OpenGlowIssue2Test", 0, 0),
-    ("rotated", "OpenGlowIssue2Test", 3, 45),
-    ("original", "OpenGlow", 0, 0),
+for name, effect, aspect, angle, fixed in (
+    ("fixed", "OpenGlowIssue2Test", 0, 0, 1),
+    ("rotated", "OpenGlowIssue2Test", 3, 45, 1),
+    ("expanded", "OpenGlowIssue2Test", 0, 0, 0),
+    ("original", "OpenGlow", 0, 0, 1),
 ):
     (out / f"{name}.aup2").write_text(
-        project.format(image=out / "sources.png", effect=effect, aspect=aspect, angle=angle),
+        project.format(image=out / "sources.png", effect=effect, aspect=aspect, angle=angle, fixed=fixed),
         encoding="utf-8",
     )
 print(out)
